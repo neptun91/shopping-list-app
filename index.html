@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>쇼핑 리스트</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -68,6 +69,11 @@
 
     .input-row button:hover {
       background: #4338ca;
+    }
+
+    .input-row button:disabled {
+      background: #a5b4fc;
+      cursor: not-allowed;
     }
 
     .stats {
@@ -160,6 +166,22 @@
       color: #ef4444;
       background: #fff5f5;
     }
+
+    .loading {
+      text-align: center;
+      color: #94a3b8;
+      font-size: 15px;
+      padding: 40px 0;
+    }
+
+    .error-msg {
+      background: #fee2e2;
+      color: #dc2626;
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
   </style>
 </head>
 <body>
@@ -168,19 +190,28 @@
 
     <div class="input-row">
       <input type="text" id="itemInput" placeholder="아이템 추가..." />
-      <button onclick="addItem()">추가</button>
+      <button id="addBtn" onclick="addItem()">추가</button>
     </div>
 
+    <div id="errorMsg" class="error-msg" style="display:none"></div>
     <div class="stats" id="stats"></div>
     <ul class="list" id="list"></ul>
     <button class="clear-btn" id="clearBtn" onclick="clearChecked()" style="display:none">완료 항목 삭제</button>
   </div>
 
   <script>
-    let items = JSON.parse(localStorage.getItem('shopping') || '[]');
+    const SUPABASE_URL = 'https://qhwijdbtpoemymgythgj.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFod2lqZGJ0cG9lbXltZ3l0aGdqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwNjkwNDQsImV4cCI6MjA5NTY0NTA0NH0.m1Eh-o5NWgM3fVCo9lrj2cmNlWLI-QulxomfqD3Yp0Q';
 
-    function save() {
-      localStorage.setItem('shopping', JSON.stringify(items));
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let items = [];
+
+    function showError(msg) {
+      const el = document.getElementById('errorMsg');
+      el.textContent = msg;
+      el.style.display = msg ? 'block' : 'none';
     }
 
     function render() {
@@ -199,11 +230,11 @@
         return;
       }
 
-      list.innerHTML = items.map((item, idx) => `
+      list.innerHTML = items.map(item => `
         <li class="item ${item.done ? 'checked' : ''}">
-          <input type="checkbox" ${item.done ? 'checked' : ''} onchange="toggle(${idx})">
+          <input type="checkbox" ${item.done ? 'checked' : ''} onchange="toggle('${item.id}', ${item.done})">
           <span class="item-text">${escapeHtml(item.text)}</span>
-          <button class="delete-btn" onclick="remove(${idx})" title="삭제">✕</button>
+          <button class="delete-btn" onclick="remove('${item.id}')" title="삭제">✕</button>
         </li>
       `).join('');
     }
@@ -212,32 +243,90 @@
       return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
-    function addItem() {
+    async function loadItems() {
+      document.getElementById('list').innerHTML = '<li class="loading">불러오는 중...</li>';
+      const { data, error } = await db
+        .from('shopping_items')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        showError('데이터를 불러오지 못했습니다: ' + error.message);
+        return;
+      }
+      items = data;
+      render();
+    }
+
+    async function addItem() {
       const input = document.getElementById('itemInput');
+      const btn = document.getElementById('addBtn');
       const text = input.value.trim();
       if (!text) return;
-      items.push({ text, done: false });
-      save();
+
+      btn.disabled = true;
+      const { data, error } = await db
+        .from('shopping_items')
+        .insert({ text, done: false })
+        .select()
+        .single();
+
+      btn.disabled = false;
+      if (error) {
+        showError('추가 실패: ' + error.message);
+        return;
+      }
+      showError('');
+      items.push(data);
       render();
       input.value = '';
       input.focus();
     }
 
-    function toggle(idx) {
-      items[idx].done = !items[idx].done;
-      save();
+    async function toggle(id, currentDone) {
+      const { error } = await db
+        .from('shopping_items')
+        .update({ done: !currentDone })
+        .eq('id', id);
+
+      if (error) {
+        showError('업데이트 실패: ' + error.message);
+        return;
+      }
+      showError('');
+      const item = items.find(i => i.id === id);
+      if (item) item.done = !currentDone;
       render();
     }
 
-    function remove(idx) {
-      items.splice(idx, 1);
-      save();
+    async function remove(id) {
+      const { error } = await db
+        .from('shopping_items')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        showError('삭제 실패: ' + error.message);
+        return;
+      }
+      showError('');
+      items = items.filter(i => i.id !== id);
       render();
     }
 
-    function clearChecked() {
+    async function clearChecked() {
+      const checkedIds = items.filter(i => i.done).map(i => i.id);
+      const { error } = await db
+        .from('shopping_items')
+        .delete()
+        .in('id', checkedIds);
+
+      if (error) {
+        showError('삭제 실패: ' + error.message);
+        return;
+      }
+      showError('');
       items = items.filter(i => !i.done);
-      save();
       render();
     }
 
@@ -245,7 +334,7 @@
       if (e.key === 'Enter') addItem();
     });
 
-    render();
+    loadItems();
   </script>
 </body>
 </html>
