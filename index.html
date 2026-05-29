@@ -264,6 +264,7 @@
       const text = input.value.trim();
       if (!text) return;
 
+      input.value = '';
       btn.disabled = true;
       const { data, error } = await db
         .from('shopping_items')
@@ -274,12 +275,12 @@
       btn.disabled = false;
       if (error) {
         showError('추가 실패: ' + error.message);
+        input.value = text;
         return;
       }
       showError('');
       items.push(data);
       render();
-      input.value = '';
       input.focus();
     }
 
